@@ -1,0 +1,8 @@
+aiogram>=3.4.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+playwright>=1.42.0
+SQLAlchemy>=2.0.0
+openpyxl>=3.1.0
+APScheduler>=3.10.0
+python-dotenv>=1.0.0

@@ -1,0 +1,31 @@
+# Виртуальное окружение
+.venv/
+venv/
+env/
+
+# Переменные окружения (реальный токен бота)
+.env
+
+# База данных
+*.db
+*.sqlite3
+
+# Кэш и скомпилированные файлы Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Файлы IDE (PyCharm)
+.idea/
+*.iml
+
+# Тестирование / покрытие
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Системные файлы ОС
+.DS_Store
+Thumbs.db
