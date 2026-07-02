@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -25,6 +26,7 @@ class Settings:
     request_timeout: int
     attach_excel_to_scheduled_report: bool
     playwright_timeout_ms: int
+    bot_proxy_url: Optional[str]
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -43,6 +45,8 @@ def load_settings() -> Settings:
             "в файле .env (см. .env.example)"
         )
 
+    proxy_url = os.getenv("PROXY_URL", "").strip() or None
+
     return Settings(
         bot_token=bot_token,
         database_url=os.getenv("DATABASE_URL", "sqlite:///price_monitor.db"),
@@ -56,4 +60,5 @@ def load_settings() -> Settings:
         playwright_timeout_ms=int(
             os.getenv("PLAYWRIGHT_TIMEOUT_MS", "15000")
         ),
+        bot_proxy_url=proxy_url,
     )
