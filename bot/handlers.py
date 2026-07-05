@@ -5,6 +5,13 @@
 через workflow_data диспетчера aiogram (см. main.py) — это позволяет
 не создавать глобальные объекты внутри модуля и упрощает
 тестирование.
+
+Диалог добавления товара (/add) построен на инлайн-кнопках, а не на
+свободном тексте — это исключает опечатки в духе "да"/"нет"/"авто" и
+делает выбор однозначным. Перед сохранением товара бот сразу
+проверяет, находится ли цена выбранным способом, и показывает
+результат — это позволяет сразу увидеть, сработал ли автоматический
+режим или указанный CSS-селектор, не дожидаясь /report.
 """
 
 from __future__ import annotations
@@ -13,11 +20,18 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import FSInputFile, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from bot.states import AddProductStates
 from database.repository import ProductRepository
@@ -35,14 +49,97 @@ router = Router()
 HELP_TEXT = (
     "🤖 Бот мониторинга цен конкурентов\n\n"
     "Команды:\n"
-    "/add — добавить товар для отслеживания\n"
+    "/add — добавить товар для отслеживания (пошагово, с кнопками)\n"
     "/list — показать отслеживаемые товары\n"
-    "/remove <id> — удалить товар\n"
+    "/remove ID — удалить товар, например: /remove 3\n"
     "/report — получить отчёт по ценам прямо сейчас\n"
     "/excel — выгрузить отчёт в Excel-файл\n"
-    "/history <id> — история цены товара\n"
-    "/cancel — отменить текущий диалог"
+    "/history ID — история цены товара, например: /history 3\n"
+    "/cancel — отменить текущий диалог\n\n"
+    "Лучше всего бот работает с обычными интернет-магазинами "
+    "(на Tilda, InSales, Bitrix и похожих платформах). Крупные "
+    "маркетплейсы (Wildberries, Ozon, Яндекс.Маркет) поддерживаются "
+    "в экспериментальном режиме — их вёрстка часто меняется, поэтому "
+    "стабильная работа не гарантирована."
 )
+
+# Домены крупных маркетплейсов — для них показываем отдельную
+# короткую подсказку при добавлении товара.
+_MARKETPLACE_DOMAINS = ("wildberries.ru", "ozon.ru", "market.yandex.ru")
+
+
+def _is_marketplace_url(url: str) -> bool:
+    """Проверяет, относится ли ссылка к одному из крупных маркетплейсов."""
+    domain = urlparse(url).netloc.lower()
+    return any(marker in domain for marker in _MARKETPLACE_DOMAINS)
+
+
+def _mode_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора способа поиска цены."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🤖 Найти цену автоматически",
+                    callback_data="add_mode:auto",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Указать CSS-селектор вручную",
+                    callback_data="add_mode:manual",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена", callback_data="add_mode:cancel"
+                )
+            ],
+        ]
+    )
+
+
+def _confirm_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения после успешно найденной цены."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Сохранить", callback_data="add_confirm:save"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔁 Попробовать другой способ",
+                    callback_data="add_confirm:retry",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена", callback_data="add_confirm:cancel"
+                )
+            ],
+        ]
+    )
+
+
+def _retry_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура на случай, если цену найти не удалось."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Указать CSS-селектор вручную",
+                    callback_data="add_confirm:manual",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена", callback_data="add_confirm:cancel"
+                )
+            ],
+        ]
+    )
 
 
 @router.message(CommandStart())
@@ -75,8 +172,10 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def cmd_add_start(message: Message, state: FSMContext) -> None:
     await state.set_state(AddProductStates.waiting_for_name)
     await message.answer(
-        "Введите название товара (для ваших собственных списков), "
-        "или /cancel для отмены:"
+        "Добавляем товар (шаг 1 из 3).\n\n"
+        "Введите название товара — это для вашего собственного "
+        "списка, в отчётах и на сайте продавца оно не отображается. "
+        "Или /cancel для отмены:"
     )
 
 
@@ -88,7 +187,11 @@ async def add_product_name(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(name=name)
     await state.set_state(AddProductStates.waiting_for_url)
-    await message.answer("Теперь пришлите ссылку на страницу товара:")
+    await message.answer(
+        "Шаг 2 из 3.\n\n"
+        "Пришлите ссылку на страницу товара (полный адрес, "
+        "начинающийся с http:// или https://):"
+    )
 
 
 @router.message(StateFilter(AddProductStates.waiting_for_url))
@@ -100,55 +203,160 @@ async def add_product_url(message: Message, state: FSMContext) -> None:
             "(начинается с http:// или https://):"
         )
         return
+
     await state.update_data(url=url)
-    await state.set_state(AddProductStates.waiting_for_selector)
-    await message.answer(
-        "Укажите CSS-селектор элемента с ценой на странице "
-        "(например: span.price или #product-price).\n\n"
-        "Если не знаете, как его найти — откройте страницу товара "
-        "в браузере, кликните правой кнопкой по цене → "
-        "«Просмотреть код» и скопируйте класс или id элемента."
-    )
+    await state.set_state(AddProductStates.choosing_selector_mode)
+
+    text = "Шаг 3 из 3. Как искать цену на странице?"
+    if _is_marketplace_url(url):
+        text += (
+            "\n\n⚠️ Это похоже на крупный маркетплейс — вёрстка там "
+            "часто меняется, поэтому надёжнее начать с "
+            "автоопределения."
+        )
+    await message.answer(text, reply_markup=_mode_keyboard())
 
 
-@router.message(StateFilter(AddProductStates.waiting_for_selector))
-async def add_product_selector(message: Message, state: FSMContext) -> None:
+@router.callback_query(
+    StateFilter(AddProductStates.choosing_selector_mode),
+    F.data.startswith("add_mode:"),
+)
+async def add_product_choose_mode(
+    callback: CallbackQuery,
+    state: FSMContext,
+    tracker: PriceTracker,
+) -> None:
+    await callback.answer()
+    if not isinstance(callback.message, Message) or not isinstance(
+        callback.data, str
+    ):
+        return
+
+    action = callback.data.split(":", maxsplit=1)[1]
+
+    if action == "cancel":
+        await state.clear()
+        await callback.message.edit_text("Добавление отменено.")
+        return
+
+    if action == "manual":
+        await state.set_state(AddProductStates.waiting_for_manual_selector)
+        await callback.message.edit_text(
+            "Пришлите CSS-селектор цены.\n\n"
+            "Как его найти: откройте страницу товара в браузере, "
+            "кликните правой кнопкой мыши по цене → «Просмотреть "
+            "код» (Inspect) и скопируйте класс или id элемента, "
+            "например: span.price или #price-value."
+        )
+        return
+
+    # action == "auto"
+    await state.update_data(css_selector="")
+    await _run_test_check(callback.message, state, tracker)
+
+
+@router.message(StateFilter(AddProductStates.waiting_for_manual_selector))
+async def add_product_manual_selector(
+    message: Message,
+    state: FSMContext,
+    tracker: PriceTracker,
+) -> None:
     selector = (message.text or "").strip()
     if not selector:
         await message.answer("Селектор не может быть пустым. Повторите:")
         return
     await state.update_data(css_selector=selector)
-    await state.set_state(AddProductStates.waiting_for_dynamic_flag)
-    await message.answer(
-        "Сайт подгружает цену через JavaScript (динамически), "
-        "и обычный запрос её не увидит?\n"
-        "Ответьте «да» или «нет». Если не уверены — ответьте «нет», "
-        "бот попробует определить это автоматически."
+    await _run_test_check(message, state, tracker)
+
+
+async def _run_test_check(
+    message: Message, state: FSMContext, tracker: PriceTracker
+) -> None:
+    """Пробует найти цену прямо сейчас и показывает результат с кнопками."""
+    data = await state.get_data()
+    url = data["url"]
+    css_selector = data["css_selector"]
+
+    status_message = await message.answer("Проверяю цену на странице…")
+    result = await asyncio.to_thread(
+        tracker.get_price, url, css_selector, False
     )
 
+    await state.set_state(AddProductStates.confirming)
 
-@router.message(StateFilter(AddProductStates.waiting_for_dynamic_flag))
-async def add_product_dynamic_flag(
-    message: Message,
+    if result.price is not None:
+        method = (
+            "автоопределение (JSON-LD)"
+            if not css_selector
+            else f"селектор «{css_selector}»"
+        )
+        await status_message.edit_text(
+            f"✅ Нашёл цену: {result.price:.2f} ₽\n"
+            f"Способ: {method}\n\n"
+            "Проверьте, что это действительно текущая цена на "
+            "странице, и подтвердите сохранение:",
+            reply_markup=_confirm_keyboard(),
+        )
+    else:
+        await status_message.edit_text(
+            "⚠️ Не удалось найти цену на странице.\n"
+            f"Причина: {result.error}\n\n"
+            "Можно указать CSS-селектор вручную или отменить "
+            "добавление:",
+            reply_markup=_retry_keyboard(),
+        )
+
+
+@router.callback_query(
+    StateFilter(AddProductStates.confirming),
+    F.data.startswith("add_confirm:"),
+)
+async def add_product_confirm(
+    callback: CallbackQuery,
     state: FSMContext,
     repository: ProductRepository,
 ) -> None:
-    answer = (message.text or "").strip().lower()
-    force_dynamic = answer in {"да", "yes", "y", "д"}
+    await callback.answer()
+    if not isinstance(callback.message, Message) or not isinstance(
+        callback.data, str
+    ):
+        return
 
+    action = callback.data.split(":", maxsplit=1)[1]
+
+    if action == "cancel":
+        await state.clear()
+        await callback.message.edit_text("Добавление отменено.")
+        return
+
+    if action == "manual":
+        await state.set_state(AddProductStates.waiting_for_manual_selector)
+        await callback.message.edit_text(
+            "Пришлите CSS-селектор цены (например: span.price):"
+        )
+        return
+
+    if action == "retry":
+        await state.set_state(AddProductStates.choosing_selector_mode)
+        await callback.message.edit_text(
+            "Как искать цену на странице?", reply_markup=_mode_keyboard()
+        )
+        return
+
+    # action == "save"
     data = await state.get_data()
     product = repository.add_product(
-        owner_chat_id=message.chat.id,
+        owner_chat_id=callback.message.chat.id,
         name=data["name"],
         url=data["url"],
         css_selector=data["css_selector"],
-        force_dynamic=force_dynamic,
+        force_dynamic=False,
     )
     await state.clear()
-    await message.answer(
-        f"✅ Товар «{product.name}» добавлен (id={product.id}).\n"
+    await callback.message.edit_text(
+        f"✅ Товар «{product.name}» добавлен (id={product.id}).\n\n"
         "Он будет проверяться автоматически по расписанию. "
-        "Отчёт прямо сейчас — командой /report"
+        "Проверить прямо сейчас — командой /report."
     )
 
 
@@ -178,7 +386,10 @@ async def cmd_list(message: Message, repository: ProductRepository) -> None:
 async def cmd_remove(message: Message, repository: ProductRepository) -> None:
     args = (message.text or "").split(maxsplit=1)
     if len(args) < 2 or not args[1].strip().isdigit():
-        await message.answer("Использование: /remove <id товара>")
+        await message.answer(
+            "Использование: /remove ID_товара, например: /remove 3\n"
+            "Посмотреть ID можно командой /list"
+        )
         return
 
     product_id = int(args[1].strip())
@@ -238,7 +449,10 @@ async def cmd_history(
 ) -> None:
     args = (message.text or "").split(maxsplit=1)
     if len(args) < 2 or not args[1].strip().isdigit():
-        await message.answer("Использование: /history <id товара>")
+        await message.answer(
+            "Использование: /history ID_товара, например: /history 3\n"
+            "Посмотреть ID можно командой /list"
+        )
         return
 
     product_id = int(args[1].strip())

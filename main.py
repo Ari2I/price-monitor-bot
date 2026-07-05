@@ -11,9 +11,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.enums import ParseMode
 
 from bot.handlers import router
 from config import load_settings
@@ -42,7 +40,6 @@ async def main() -> None:
     bot = Bot(
         token=settings.bot_token,
         session=session,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dispatcher = Dispatcher()
     dispatcher.include_router(router)

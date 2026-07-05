@@ -14,6 +14,13 @@ from parser.tracker import PriceTracker
 STATIC_HTML_WITH_PRICE = '<span class="price">999 руб.</span>'
 STATIC_HTML_WITHOUT_PRICE = "<div>цена не найдена в статике</div>"
 DYNAMIC_HTML_WITH_PRICE = '<span class="price">1999 руб.</span>'
+STATIC_HTML_WITH_JSONLD_PRICE = """
+<html><head>
+<script type="application/ld+json">
+{"@type": "Product", "offers": {"price": "777"}}
+</script>
+</head><body><div>цены на странице визуально нет</div></body></html>
+"""
 
 
 class PriceTrackerTest(unittest.TestCase):
@@ -77,6 +84,41 @@ class PriceTrackerTest(unittest.TestCase):
         )
         self.assertIsNone(result.price)
         self.assertIsNotNone(result.error)
+
+    @patch("parser.tracker.StaticHtmlFetcher.fetch")
+    def test_auto_mode_finds_price_via_jsonld(self, mock_static):
+        # Пустой селектор ("") включает режим "авто": CSS-селектор
+        # не используется вовсе, цена ищется только через JSON-LD.
+        mock_static.return_value = STATIC_HTML_WITH_JSONLD_PRICE
+        with patch(
+            "parser.tracker.DynamicHtmlFetcher.fetch"
+        ) as mock_dynamic:
+            result = self.tracker.get_price(
+                url="https://example.com/item",
+                css_selector="",
+            )
+        self.assertEqual(result.price, 777.0)
+        self.assertFalse(result.used_dynamic)
+        mock_dynamic.assert_not_called()
+
+    @patch("parser.tracker.StaticHtmlFetcher.fetch")
+    def test_jsonld_used_as_fallback_when_selector_not_found(
+        self, mock_static
+    ):
+        # Селектор указан, но не совпадает с реальной вёрсткой —
+        # цена всё равно находится через JSON-LD без обращения к
+        # Playwright.
+        mock_static.return_value = STATIC_HTML_WITH_JSONLD_PRICE
+        with patch(
+            "parser.tracker.DynamicHtmlFetcher.fetch"
+        ) as mock_dynamic:
+            result = self.tracker.get_price(
+                url="https://example.com/item",
+                css_selector="span.not-existing-class",
+            )
+        self.assertEqual(result.price, 777.0)
+        self.assertFalse(result.used_dynamic)
+        mock_dynamic.assert_not_called()
 
 
 if __name__ == "__main__":
