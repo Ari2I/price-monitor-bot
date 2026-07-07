@@ -13,10 +13,16 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
+# Валюта по умолчанию для отображения, если её не удалось определить
+# автоматически — используется только для показа в отчёте, а не как
+# гарантированный факт о товаре.
+DEFAULT_CURRENCY_LABEL = "₽"
+
 COLUMN_TITLES = [
     "Название",
     "Ссылка",
     "Текущая цена",
+    "Валюта",
     "Предыдущая цена",
     "Изменение",
     "Изменение, %",
@@ -31,6 +37,7 @@ class ProductReportRow:
     name: str
     url: str
     current_price: Optional[float]
+    currency: Optional[str]
     previous_price: Optional[float]
     checked_at: Optional[datetime]
 
@@ -65,6 +72,7 @@ def export_report_to_excel(
                 row.name,
                 row.url,
                 row.current_price,
+                row.currency or DEFAULT_CURRENCY_LABEL,
                 row.previous_price,
                 row.change,
                 row.change_percent,

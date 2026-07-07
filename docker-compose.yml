@@ -1,0 +1,24 @@
+services:
+  bot:
+    build: .
+    container_name: price_monitor_bot
+    # unless-stopped — контейнер сам поднимется после сбоя или
+    # перезагрузки сервера, без ручного вмешательства.
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Файл базы данных хранится в volume ./data, а не внутри
+      # образа — при пересборке контейнера история цен не теряется.
+      - DATABASE_URL=sqlite:////app/data/price_monitor.db
+    volumes:
+      - ./data:/app/data
+    # Ограничения ресурсов — на случай сбоя Playwright/aiogram не
+    # должны положить весь сервер.
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

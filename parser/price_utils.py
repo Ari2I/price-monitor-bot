@@ -64,3 +64,37 @@ def parse_price(raw_text: Optional[str]) -> Optional[float]:
         return float(number_str)
     except ValueError:
         return None
+
+
+# Всё, что не относится к самому числу (не цифра, не пробел, не
+# точка/запятая-разделитель) — это и есть обозначение валюты,
+# каким бы оно ни было: символ ("$", "€", "₽"), сокращение ("руб",
+# "USD") и т.п. Модуль не переводит его в код ISO 4217 намеренно —
+# такой перевод неоднозначен (например, символ "¥" используется и
+# для юаня, и для иены), поэтому обозначение просто показывается
+# пользователю как есть, без домысливания.
+_CURRENCY_TOKEN_PATTERN = re.compile(r"[^\d\s.,]+")
+
+
+def extract_currency_symbol(raw_text: Optional[str]) -> Optional[str]:
+    """
+    Извлекает обозначение валюты из текста рядом с ценой.
+
+    Примеры:
+        "1 299,90 руб." -> "руб"
+        "$49.99"        -> "$"
+        "49.99 USD"     -> "USD"
+        "49999"         -> None (обозначение валюты не найдено)
+
+    Возвращает None, если строка пустая или валюту определить не
+    удалось (например, указано только число без единиц).
+    """
+    if not raw_text:
+        return None
+
+    match = _CURRENCY_TOKEN_PATTERN.search(raw_text)
+    if not match:
+        return None
+
+    symbol = match.group(0).strip()
+    return symbol or None

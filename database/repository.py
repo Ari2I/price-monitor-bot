@@ -8,21 +8,64 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from database.models import Base, PriceRecord, Product
 
 
+@dataclass
+class PriceSnapshot:
+    """Цена и валюта последней сохранённой записи по товару."""
+
+    price: float
+    currency: Optional[str]
+
+
 class ProductRepository:
     """Репозиторий для товаров и истории их цен."""
+
+    # Колонки, добавленные в более поздних версиях приложения. Для
+    # каждой новой версии базы данных, созданной до появления этой
+    # колонки, миграция выполняется автоматически при подключении —
+    # в проекте нет системы миграций (Alembic), а такой минимальный
+    # ручной ALTER TABLE вполне достаточен для одного-двух полей и
+    # работает как в SQLite, так и в PostgreSQL.
+    _SCHEMA_MIGRATIONS = [
+        ("price_records", "currency", "VARCHAR(8)"),
+        ("products", "consecutive_failures", "INTEGER DEFAULT 0"),
+    ]
 
     def __init__(self, database_url: str) -> None:
         self._engine = create_engine(database_url)
         Base.metadata.create_all(self._engine)
+        self._run_schema_migrations()
         self._session_factory = sessionmaker(bind=self._engine)
+
+    def _run_schema_migrations(self) -> None:
+        """Добавляет недостающие колонки в уже существующие таблицы."""
+        inspector = inspect(self._engine)
+        table_names = set(inspector.get_table_names())
+
+        for table_name, column_name, column_type_sql in self._SCHEMA_MIGRATIONS:
+            if table_name not in table_names:
+                continue
+            columns = {
+                column["name"]
+                for column in inspector.get_columns(table_name)
+            }
+            if column_name in columns:
+                continue
+            with self._engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} "
+                        f"ADD COLUMN {column_name} {column_type_sql}"
+                    )
+                )
 
     def _session(self) -> Session:
         return self._session_factory()
@@ -85,10 +128,17 @@ class ProductRepository:
             _ = product.price_records  # подгружаем связанные записи
             return product
 
-    def save_price_record(self, product_id: int, price: float) -> PriceRecord:
-        """Сохраняет новую запись о цене товара."""
+    def save_price_record(
+        self,
+        product_id: int,
+        price: float,
+        currency: Optional[str] = None,
+    ) -> PriceRecord:
+        """Сохраняет новую запись о цене (и валюте) товара."""
         with self._session() as session:
-            record = PriceRecord(product_id=product_id, price=price)
+            record = PriceRecord(
+                product_id=product_id, price=price, currency=currency
+            )
             session.add(record)
             session.commit()
             session.refresh(record)
@@ -110,6 +160,39 @@ class ProductRepository:
             return records
 
     def get_latest_price(self, product_id: int) -> Optional[float]:
-        """Возвращает последнюю известную цену товара."""
+        """Возвращает последнюю известную цену товара (без валюты)."""
         history = self.get_price_history(product_id, limit=1)
         return history[0].price if history else None
+
+    def get_latest_price_snapshot(
+        self, product_id: int
+    ) -> Optional[PriceSnapshot]:
+        """Возвращает последнюю известную цену товара вместе с валютой."""
+        history = self.get_price_history(product_id, limit=1)
+        if not history:
+            return None
+        record = history[0]
+        return PriceSnapshot(price=record.price, currency=record.currency)
+
+    def reset_failure_count(self, product_id: int) -> None:
+        """Сбрасывает счётчик подряд идущих неудачных проверок товара."""
+        with self._session() as session:
+            product = session.get(Product, product_id)
+            if product is not None:
+                product.consecutive_failures = 0
+                session.commit()
+
+    def increment_failure_count(self, product_id: int) -> int:
+        """
+        Увеличивает счётчик подряд идущих неудачных проверок и
+        возвращает новое значение — используется, чтобы предупредить
+        пользователя, если сайт систематически не отдаёт цену
+        (вероятная блокировка), а не только при разовом сбое.
+        """
+        with self._session() as session:
+            product = session.get(Product, product_id)
+            if product is None:
+                return 0
+            product.consecutive_failures += 1
+            session.commit()
+            return product.consecutive_failures

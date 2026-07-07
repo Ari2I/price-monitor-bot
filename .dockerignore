@@ -1,0 +1,23 @@
+# Секреты никогда не должны попадать внутрь образа — только через
+# env_file в docker-compose.yml во время запуска контейнера.
+.env
+
+# База данных — хранится в volume, а не в образе
+*.db
+*.sqlite3
+data/
+
+# Виртуальное окружение и кэш
+.venv/
+venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+
+# Служебные файлы разработки
+.git/
+.gitignore
+.idea/
+tests/
+README.md

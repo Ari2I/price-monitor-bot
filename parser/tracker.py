@@ -9,11 +9,15 @@
        Playwright (для сайтов с динамической подгрузкой цены).
 
 Логика извлечения цены из полученного HTML:
-    1. Если задан CSS-селектор — сначала пробуем найти цену по нему.
+    1. Если задан CSS-селектор — сначала пробуем найти цену по нему,
+       а валюту определяем по символу/сокращению рядом с числом
+       (например, "$", "руб", "USD").
     2. Если селектор не задан (режим "авто") или по нему цена не
        найдена — пробуем найти цену в структурированных данных
        JSON-LD (schema.org), которые многие сайты публикуют для
-       поисковых систем независимо от вёрстки страницы.
+       поисковых систем независимо от вёрстки страницы. Валюта в
+       этом случае берётся из явного поля priceCurrency, а не
+       угадывается по символу.
 
 Такой подход даёт "универсальность" без лишних затрат: большинство
 интернет-магазинов отдают цену в статическом HTML, и для них не
@@ -30,7 +34,7 @@ from typing import Optional, Tuple
 from parser.base import HtmlFetchError, HtmlFetcher
 from parser.dynamic_parser import DynamicHtmlFetcher
 from parser.jsonld_extractor import extract_price_from_jsonld
-from parser.price_utils import parse_price
+from parser.price_utils import extract_currency_symbol, parse_price
 from parser.static_parser import StaticHtmlFetcher, extract_price_text
 
 logger = logging.getLogger(__name__)
@@ -43,17 +47,24 @@ class PriceCheckResult:
     price: Optional[float]
     used_dynamic: bool
     error: Optional[str] = None
+    currency: Optional[str] = None
 
 
 class PriceTracker:
-    """Получает актуальную цену товара по URL и (опционально) CSS-селектору."""
+    """Получает актуальную цену и валюту товара по URL и CSS-селектору."""
 
     def __init__(
         self,
         request_timeout: int = 10,
         playwright_timeout_ms: int = 15000,
+        max_retries: int = 2,
+        retry_backoff_seconds: float = 1.0,
     ) -> None:
-        self._static_fetcher = StaticHtmlFetcher(timeout=request_timeout)
+        self._static_fetcher = StaticHtmlFetcher(
+            timeout=request_timeout,
+            max_retries=max_retries,
+            backoff_seconds=retry_backoff_seconds,
+        )
         self._dynamic_fetcher = DynamicHtmlFetcher(
             timeout_ms=playwright_timeout_ms
         )
@@ -65,10 +76,10 @@ class PriceTracker:
         force_dynamic: bool = False,
     ) -> PriceCheckResult:
         """
-        Возвращает текущую цену товара на странице.
+        Возвращает текущую цену и валюту товара на странице.
 
-        Пустой css_selector включает режим "авто" — цена ищется
-        только через JSON-LD, без привязки к конкретному CSS-классу.
+        Пустой css_selector включает режим "авто" — цена (и валюта)
+        ищутся только через JSON-LD, без привязки к CSS-классу.
         """
         if force_dynamic:
             html, error = self._safe_fetch(self._dynamic_fetcher, url)
@@ -105,9 +116,11 @@ class PriceTracker:
                 price=None, used_dynamic=used_dynamic, error=fetch_error
             )
 
-        price = self._extract_price(html, css_selector)
+        price, currency = self._extract_price_and_currency(html, css_selector)
         if price is not None:
-            return PriceCheckResult(price=price, used_dynamic=used_dynamic)
+            return PriceCheckResult(
+                price=price, used_dynamic=used_dynamic, currency=currency
+            )
 
         return PriceCheckResult(
             price=None,
@@ -116,13 +129,16 @@ class PriceTracker:
         )
 
     @staticmethod
-    def _extract_price(html: str, css_selector: str) -> Optional[float]:
-        """Пробует найти цену по селектору, затем через JSON-LD."""
+    def _extract_price_and_currency(
+        html: str, css_selector: str
+    ) -> Tuple[Optional[float], Optional[str]]:
+        """Пробует найти цену и валюту по селектору, затем через JSON-LD."""
         if css_selector:
             price_text = extract_price_text(html, css_selector)
             price = parse_price(price_text)
             if price is not None:
-                return price
+                currency = extract_currency_symbol(price_text)
+                return price, currency
 
         return extract_price_from_jsonld(html)
 

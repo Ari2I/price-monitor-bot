@@ -38,6 +38,7 @@ from database.repository import ProductRepository
 from export.excel_export import export_report_to_excel
 from parser.tracker import PriceTracker
 from reporting import (
+    CONSECUTIVE_FAILURES_WARNING_THRESHOLD,
     build_report_rows,
     build_text_report,
     check_products_for_chat,
@@ -56,22 +57,29 @@ HELP_TEXT = (
     "/excel — выгрузить отчёт в Excel-файл\n"
     "/history ID — история цены товара, например: /history 3\n"
     "/cancel — отменить текущий диалог\n\n"
-    "Лучше всего бот работает с обычными интернет-магазинами "
-    "(на Tilda, InSales, Bitrix и похожих платформах). Крупные "
-    "маркетплейсы (Wildberries, Ozon, Яндекс.Маркет) поддерживаются "
-    "в экспериментальном режиме — их вёрстка часто меняется, поэтому "
-    "стабильная работа не гарантирована."
+    "Бот рассчитан на обычные интернет-магазины (на Tilda, InSales, "
+    "Bitrix и похожих платформах). Крупные площадки с антибот-защитой "
+    "(Wildberries, Ozon, Яндекс.Маркет, Lamoda и подобные) в рамках "
+    "этого проекта не поддерживаются — на них часто не удаётся "
+    "получить цену даже автоматически."
 )
 
-# Домены крупных маркетплейсов — для них показываем отдельную
-# короткую подсказку при добавлении товара.
-_MARKETPLACE_DOMAINS = ("wildberries.ru", "ozon.ru", "market.yandex.ru")
+# Домены крупных площадок с известной антибот-защитой — бот не
+# пытается их поддерживать (сознательное решение, см. README), но
+# предупреждает пользователя заранее, чтобы не тратить время на
+# попытки настройки того, что скорее всего не заработает.
+_KNOWN_DIFFICULT_DOMAINS = (
+    "wildberries.ru",
+    "ozon.ru",
+    "market.yandex.ru",
+    "lamoda.ru",
+)
 
 
-def _is_marketplace_url(url: str) -> bool:
-    """Проверяет, относится ли ссылка к одному из крупных маркетплейсов."""
+def _is_known_difficult_url(url: str) -> bool:
+    """Проверяет, относится ли ссылка к сайту с известной антибот-защитой."""
     domain = urlparse(url).netloc.lower()
-    return any(marker in domain for marker in _MARKETPLACE_DOMAINS)
+    return any(marker in domain for marker in _KNOWN_DIFFICULT_DOMAINS)
 
 
 def _mode_keyboard() -> InlineKeyboardMarkup:
@@ -208,11 +216,14 @@ async def add_product_url(message: Message, state: FSMContext) -> None:
     await state.set_state(AddProductStates.choosing_selector_mode)
 
     text = "Шаг 3 из 3. Как искать цену на странице?"
-    if _is_marketplace_url(url):
+    if _is_known_difficult_url(url):
         text += (
-            "\n\n⚠️ Это похоже на крупный маркетплейс — вёрстка там "
-            "часто меняется, поэтому надёжнее начать с "
-            "автоопределения."
+            "\n\n⚠️ Это один из сайтов с известной антибот-защитой "
+            "(Wildberries, Ozon, Яндекс.Маркет, Lamoda и подобные). "
+            "В рамках этого бота такие сайты не поддерживаются "
+            "официально — с высокой вероятностью цену найти не "
+            "удастся ни автоматически, ни по CSS-селектору. Можно "
+            "попробовать, но результат не гарантирован."
         )
     await message.answer(text, reply_markup=_mode_keyboard())
 
@@ -290,8 +301,9 @@ async def _run_test_check(
             if not css_selector
             else f"селектор «{css_selector}»"
         )
+        currency_label = result.currency or "₽ (не удалось определить точно)"
         await status_message.edit_text(
-            f"✅ Нашёл цену: {result.price:.2f} ₽\n"
+            f"✅ Нашёл цену: {result.price:.2f} {currency_label}\n"
             f"Способ: {method}\n\n"
             "Проверьте, что это действительно текущая цена на "
             "странице, и подтвердите сохранение:",
@@ -374,11 +386,20 @@ async def cmd_list(message: Message, repository: ProductRepository) -> None:
 
     lines = ["📦 Отслеживаемые товары:\n"]
     for product in products:
-        latest_price = repository.get_latest_price(product.id)
-        price_text = (
-            f"{latest_price:.2f} ₽" if latest_price is not None else "нет данных"
-        )
-        lines.append(f"#{product.id} {product.name} — {price_text}")
+        snapshot = repository.get_latest_price_snapshot(product.id)
+        if snapshot is None:
+            price_text = "нет данных"
+        else:
+            currency_label = snapshot.currency or "₽"
+            price_text = f"{snapshot.price:.2f} {currency_label}"
+
+        line = f"#{product.id} {product.name} — {price_text}"
+        if product.consecutive_failures >= CONSECUTIVE_FAILURES_WARNING_THRESHOLD:
+            line += (
+                f"\n   ⛔ {product.consecutive_failures} неудачных "
+                "проверок подряд — вероятна блокировка сайта"
+            )
+        lines.append(line)
     await message.answer("\n".join(lines))
 
 
@@ -468,8 +489,10 @@ async def cmd_history(
 
     lines = [f"📈 История цены «{product.name}»:\n"]
     for record in history:
+        currency_label = record.currency or "₽"
         lines.append(
-            f"{record.checked_at:%Y-%m-%d %H:%M} — {record.price:.2f} ₽"
+            f"{record.checked_at:%Y-%m-%d %H:%M} — "
+            f"{record.price:.2f} {currency_label}"
         )
     await message.answer("\n".join(lines))
 

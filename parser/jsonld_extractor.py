@@ -1,5 +1,5 @@
 """
-Извлечение цены товара из структурированных данных JSON-LD
+Извлечение цены и валюты товара из структурированных данных JSON-LD
 (schema.org Product/Offer).
 
 Многие интернет-магазины встраивают такие данные в HTML-код
@@ -7,6 +7,11 @@
 показывать цену прямо в поисковой выдаче. Эти данные не зависят от
 того, как цена отображается визуально на странице, и обычно
 устойчивее к редизайну сайта, чем конкретный CSS-класс.
+
+Схема schema.org указывает валюту явно, отдельным полем
+`priceCurrency` (код ISO 4217, например "RUB" или "USD") рядом с
+самой ценой — это надёжнее, чем угадывать валюту по символу в
+тексте, поэтому для JSON-LD валюта берётся именно из этого поля.
 
 Важная оговорка: это не гарантированный способ — не каждый сайт
 публикует такие данные, а сама разметка может отличаться от
@@ -18,7 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from bs4 import BeautifulSoup
 
@@ -32,12 +37,14 @@ logger = logging.getLogger(__name__)
 _PRICE_KEYS = ("price", "lowPrice", "highPrice")
 
 
-def extract_price_from_jsonld(html: str) -> Optional[float]:
+def extract_price_from_jsonld(html: str) -> Tuple[Optional[float], Optional[str]]:
     """
-    Ищет цену товара в блоках <script type="application/ld+json">.
+    Ищет цену и валюту товара в блоках <script type="application/ld+json">.
 
-    Возвращает None, если структурированные данные отсутствуют,
-    повреждены или не содержат распознаваемой цены.
+    Возвращает кортеж (цена, валюта). Оба значения — None, если
+    структурированные данные отсутствуют, повреждены или не содержат
+    распознаваемой цены. Валюта может быть None, даже если цена
+    найдена — не все сайты указывают поле priceCurrency.
     """
     soup = BeautifulSoup(html, "html.parser")
     for script in soup.find_all("script", type="application/ld+json"):
@@ -51,31 +58,36 @@ def extract_price_from_jsonld(html: str) -> Optional[float]:
             logger.debug("Не удалось разобрать JSON-LD блок как JSON")
             continue
 
-        price = _find_price(data)
+        price, currency = _find_price_and_currency(data)
         if price is not None:
-            return price
+            return price, currency
 
-    return None
+    return None, None
 
 
-def _find_price(node: Any) -> Optional[float]:
-    """Рекурсивно ищет цену в произвольной JSON-структуре."""
+def _find_price_and_currency(
+    node: Any,
+) -> Tuple[Optional[float], Optional[str]]:
+    """Рекурсивно ищет цену и соседнюю с ней валюту в JSON-структуре."""
     if isinstance(node, dict):
         for key in _PRICE_KEYS:
             if key in node:
                 price = _to_float(node[key])
                 if price is not None:
-                    return price
+                    currency = node.get("priceCurrency")
+                    if not isinstance(currency, str) or not currency.strip():
+                        currency = None
+                    return price, currency
         for value in node.values():
-            price = _find_price(value)
+            price, currency = _find_price_and_currency(value)
             if price is not None:
-                return price
+                return price, currency
     elif isinstance(node, list):
         for item in node:
-            price = _find_price(item)
+            price, currency = _find_price_and_currency(item)
             if price is not None:
-                return price
-    return None
+                return price, currency
+    return None, None
 
 
 def _to_float(value: Any) -> Optional[float]:

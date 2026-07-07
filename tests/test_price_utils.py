@@ -1,8 +1,8 @@
-"""Тесты для parser.price_utils.parse_price."""
+"""Тесты для parser.price_utils.parse_price и extract_currency_symbol."""
 
 import unittest
 
-from parser.price_utils import parse_price
+from parser.price_utils import extract_currency_symbol, parse_price
 
 
 class ParsePriceTest(unittest.TestCase):
@@ -33,6 +33,32 @@ class ParsePriceTest(unittest.TestCase):
 
     def test_no_digits(self):
         self.assertIsNone(parse_price("Цена по запросу"))
+
+
+class ExtractCurrencySymbolTest(unittest.TestCase):
+    def test_ruble_abbreviation(self):
+        self.assertEqual(extract_currency_symbol("1 299,90 руб."), "руб")
+
+    def test_ruble_sign(self):
+        self.assertEqual(extract_currency_symbol("1.299,90 ₽"), "₽")
+
+    def test_dollar_sign_before_number(self):
+        self.assertEqual(extract_currency_symbol("$49.99"), "$")
+
+    def test_euro_sign_before_number(self):
+        self.assertEqual(extract_currency_symbol("€49.99"), "€")
+
+    def test_currency_code_after_number(self):
+        self.assertEqual(extract_currency_symbol("49.99 USD"), "USD")
+
+    def test_no_currency_found_for_plain_number(self):
+        self.assertIsNone(extract_currency_symbol("49999"))
+
+    def test_none_input(self):
+        self.assertIsNone(extract_currency_symbol(None))
+
+    def test_empty_string(self):
+        self.assertIsNone(extract_currency_symbol(""))
 
 
 if __name__ == "__main__":

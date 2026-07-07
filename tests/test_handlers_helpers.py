@@ -2,28 +2,33 @@
 
 import unittest
 
-from bot.handlers import _is_marketplace_url
+from bot.handlers import _is_known_difficult_url
 
 
-class IsMarketplaceUrlTest(unittest.TestCase):
+class IsKnownDifficultUrlTest(unittest.TestCase):
     def test_detects_wildberries(self):
         self.assertTrue(
-            _is_marketplace_url("https://www.wildberries.ru/catalog/123")
+            _is_known_difficult_url("https://www.wildberries.ru/catalog/123")
         )
 
     def test_detects_ozon(self):
         self.assertTrue(
-            _is_marketplace_url("https://www.ozon.ru/product/456")
+            _is_known_difficult_url("https://www.ozon.ru/product/456")
         )
 
     def test_detects_yandex_market(self):
         self.assertTrue(
-            _is_marketplace_url("https://market.yandex.ru/product/789")
+            _is_known_difficult_url("https://market.yandex.ru/product/789")
         )
 
-    def test_regular_shop_is_not_marketplace(self):
+    def test_detects_lamoda(self):
+        self.assertTrue(
+            _is_known_difficult_url("https://www.lamoda.ru/p/abc123/")
+        )
+
+    def test_regular_shop_is_not_known_difficult(self):
         self.assertFalse(
-            _is_marketplace_url("https://shop.example.com/item/1")
+            _is_known_difficult_url("https://shop.example.com/item/1")
         )
 
 

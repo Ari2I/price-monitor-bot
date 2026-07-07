@@ -48,6 +48,8 @@ async def main() -> None:
     tracker = PriceTracker(
         request_timeout=settings.request_timeout,
         playwright_timeout_ms=settings.playwright_timeout_ms,
+        max_retries=settings.request_max_retries,
+        retry_backoff_seconds=settings.request_retry_backoff_seconds,
     )
 
     scheduler = create_scheduler(

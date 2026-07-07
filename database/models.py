@@ -41,6 +41,10 @@ class Product(Base):
     url: Mapped[str] = mapped_column(String(2048))
     css_selector: Mapped[str] = mapped_column(String(512))
     force_dynamic: Mapped[bool] = mapped_column(default=False)
+    # Количество проверок подряд, при которых не удалось получить
+    # цену — используется, чтобы предупредить пользователя о
+    # вероятной блокировке сайта, не просто молча повторяя попытки.
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow
     )
@@ -67,6 +71,7 @@ class PriceRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
     price: Mapped[float] = mapped_column(Float)
+    currency: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     checked_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, index=True
     )

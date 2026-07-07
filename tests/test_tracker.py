@@ -17,10 +17,11 @@ DYNAMIC_HTML_WITH_PRICE = '<span class="price">1999 руб.</span>'
 STATIC_HTML_WITH_JSONLD_PRICE = """
 <html><head>
 <script type="application/ld+json">
-{"@type": "Product", "offers": {"price": "777"}}
+{"@type": "Product", "offers": {"price": "777", "priceCurrency": "RUB"}}
 </script>
 </head><body><div>цены на странице визуально нет</div></body></html>
 """
+STATIC_HTML_WITH_USD_SELECTOR_PRICE = '<span class="price">$49.99</span>'
 
 
 class PriceTrackerTest(unittest.TestCase):
@@ -38,8 +39,19 @@ class PriceTrackerTest(unittest.TestCase):
                 css_selector="span.price",
             )
         self.assertEqual(result.price, 999.0)
+        self.assertEqual(result.currency, "руб")
         self.assertFalse(result.used_dynamic)
         mock_dynamic.assert_not_called()
+
+    @patch("parser.tracker.StaticHtmlFetcher.fetch")
+    def test_currency_detected_from_dollar_symbol(self, mock_static):
+        mock_static.return_value = STATIC_HTML_WITH_USD_SELECTOR_PRICE
+        result = self.tracker.get_price(
+            url="https://example.com/item",
+            css_selector="span.price",
+        )
+        self.assertEqual(result.price, 49.99)
+        self.assertEqual(result.currency, "$")
 
     @patch("parser.tracker.DynamicHtmlFetcher.fetch")
     @patch("parser.tracker.StaticHtmlFetcher.fetch")
@@ -54,6 +66,7 @@ class PriceTrackerTest(unittest.TestCase):
             css_selector="span.price",
         )
         self.assertEqual(result.price, 1999.0)
+        self.assertEqual(result.currency, "руб")
         self.assertTrue(result.used_dynamic)
 
     @patch("parser.tracker.DynamicHtmlFetcher.fetch")
@@ -88,7 +101,8 @@ class PriceTrackerTest(unittest.TestCase):
     @patch("parser.tracker.StaticHtmlFetcher.fetch")
     def test_auto_mode_finds_price_via_jsonld(self, mock_static):
         # Пустой селектор ("") включает режим "авто": CSS-селектор
-        # не используется вовсе, цена ищется только через JSON-LD.
+        # не используется вовсе, цена и валюта ищутся только через
+        # JSON-LD (priceCurrency).
         mock_static.return_value = STATIC_HTML_WITH_JSONLD_PRICE
         with patch(
             "parser.tracker.DynamicHtmlFetcher.fetch"
@@ -98,6 +112,7 @@ class PriceTrackerTest(unittest.TestCase):
                 css_selector="",
             )
         self.assertEqual(result.price, 777.0)
+        self.assertEqual(result.currency, "RUB")
         self.assertFalse(result.used_dynamic)
         mock_dynamic.assert_not_called()
 
@@ -106,8 +121,8 @@ class PriceTrackerTest(unittest.TestCase):
         self, mock_static
     ):
         # Селектор указан, но не совпадает с реальной вёрсткой —
-        # цена всё равно находится через JSON-LD без обращения к
-        # Playwright.
+        # цена и валюта всё равно находятся через JSON-LD без
+        # обращения к Playwright.
         mock_static.return_value = STATIC_HTML_WITH_JSONLD_PRICE
         with patch(
             "parser.tracker.DynamicHtmlFetcher.fetch"
@@ -117,6 +132,7 @@ class PriceTrackerTest(unittest.TestCase):
                 css_selector="span.not-existing-class",
             )
         self.assertEqual(result.price, 777.0)
+        self.assertEqual(result.currency, "RUB")
         self.assertFalse(result.used_dynamic)
         mock_dynamic.assert_not_called()
 

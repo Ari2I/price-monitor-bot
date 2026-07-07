@@ -27,6 +27,8 @@ class Settings:
     attach_excel_to_scheduled_report: bool
     playwright_timeout_ms: int
     bot_proxy_url: Optional[str]
+    request_max_retries: int
+    request_retry_backoff_seconds: float
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -61,4 +63,8 @@ def load_settings() -> Settings:
             os.getenv("PLAYWRIGHT_TIMEOUT_MS", "15000")
         ),
         bot_proxy_url=proxy_url,
+        request_max_retries=int(os.getenv("REQUEST_MAX_RETRIES", "2")),
+        request_retry_backoff_seconds=float(
+            os.getenv("REQUEST_RETRY_BACKOFF_SECONDS", "1.0")
+        ),
     )
